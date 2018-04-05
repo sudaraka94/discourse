@@ -411,7 +411,7 @@ module Email
       return unless mail[:from]
 
       if mail[:from].errors.blank?
-        mail[:from].address_list.addresses.each do |address_field|
+        mail[:from].element.addresses.each do |address_field|
           address_field.decoded
           from_address = address_field.address
           from_display_name = address_field.display_name.try(:to_s)
@@ -920,8 +920,8 @@ module Email
 
     def add_other_addresses(post, sender)
       %i(to cc bcc).each do |d|
-        if @mail[d] && @mail[d].address_list && @mail[d].address_list.addresses
-          @mail[d].address_list.addresses.each do |address_field|
+        if @mail[d] && @mail[d].element && @mail[d].element.addresses
+          @mail[d].element.addresses.each do |address_field|
             begin
               address_field.decoded
               email = address_field.address.downcase

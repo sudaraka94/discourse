@@ -15,7 +15,7 @@ RSpec.describe Jobs::DownloadBackupEmail do
       email_prefix: SiteSetting.title
     ))
 
-    expect(email.body.raw_source).to eq(I18n.t('download_backup_mailer.text_body_template',
+    expect(email.body.to_s).to eq(I18n.t('download_backup_mailer.text_body_template',
       backup_file_path: "http://some.example.test/?token=#{EmailBackupToken.get(user.id)}"
     ))
   end

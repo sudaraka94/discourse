@@ -24,7 +24,7 @@ else
   gem 'seed-fu'
 end
 
-gem 'mail', require: false
+gem 'mail', require: false, git: 'https://github.com/mikel/mail.git'
 gem 'mini_mime'
 gem 'mini_suffix'
 
