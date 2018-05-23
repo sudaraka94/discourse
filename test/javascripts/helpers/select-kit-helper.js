@@ -105,6 +105,10 @@ function selectKit(selector) { // eslint-disable-line no-unused-vars
   };
 
   return {
+    expandAwait: function() {
+      return expandSelectKit(selector);
+    },
+
     expand: function() {
       expandSelectKit(selector);
       return selectKit(selector);
@@ -118,6 +122,10 @@ function selectKit(selector) { // eslint-disable-line no-unused-vars
     selectRowByIndex: function(index) {
       selectKitSelectRowByIndex(index, selector);
       return selectKit(selector);
+    },
+
+    selectRowByValueAwait: function(value) {
+      return selectKitSelectRowByValue(value, selector);
     },
 
     selectRowByValue: function(value) {

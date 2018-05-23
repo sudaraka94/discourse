@@ -24,7 +24,7 @@ else
   gem 'seed-fu'
 end
 
-gem 'mail', require: false
+gem 'mail', '2.7.1.rc1', require: false
 gem 'mini_mime'
 gem 'mini_suffix'
 
@@ -34,7 +34,7 @@ gem 'redis-namespace'
 
 gem 'active_model_serializers', '~> 0.8.3'
 
-gem 'onebox', '1.8.45'
+gem 'onebox', '1.8.47'
 
 gem 'http_accept_language', '~>2.0.5', require: false
 
@@ -58,7 +58,7 @@ gem 'aws-sdk-s3', require: false
 gem 'excon', require: false
 gem 'unf', require: false
 
-gem 'email_reply_trimmer', '0.1.11'
+gem 'email_reply_trimmer', '~> 0.1'
 
 # Forked until https://github.com/toy/image_optim/pull/149 is merged
 gem 'discourse_image_optim', require: 'image_optim'
@@ -116,7 +116,6 @@ group :test, :development do
   gem 'certified', require: false
   # later appears to break Fabricate(:topic, category: category)
   gem 'fabrication', '2.9.8', require: false
-  gem 'discourse-qunit-rails', require: 'qunit-rails'
   gem 'mocha', require: false
   gem 'rb-fsevent', require: RUBY_PLATFORM =~ /darwin/i ? 'rb-fsevent' : false
   gem 'rb-inotify', '~> 0.9', require: RUBY_PLATFORM =~ /linux/i ? 'rb-inotify' : false
@@ -186,3 +185,5 @@ if ENV["IMPORT"] == "1"
   gem 'ruby-bbcode-to-md', github: 'nlalonde/ruby-bbcode-to-md'
   gem 'reverse_markdown'
 end
+
+gem 'webpush', require: false

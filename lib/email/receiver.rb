@@ -21,6 +21,7 @@ module Email
     class BouncedEmailError            < ProcessingError; end
     class NoBodyDetectedError          < ProcessingError; end
     class NoSenderDetectedError        < ProcessingError; end
+    class FromReplyByAddressError      < ProcessingError; end
     class InactiveUserError            < ProcessingError; end
     class SilencedUserError            < ProcessingError; end
     class BadDestinationAddress        < ProcessingError; end
@@ -33,6 +34,7 @@ module Email
     class InvalidPostAction            < ProcessingError; end
     class UnsubscribeNotAllowed        < ProcessingError; end
     class EmailNotAllowed              < ProcessingError; end
+    class OldDestinationError          < ProcessingError; end
 
     attr_reader :incoming_email
     attr_reader :raw_email
@@ -42,8 +44,7 @@ module Email
     COMMON_ENCODINGS ||= [-"utf-8", -"windows-1252", -"iso-8859-1"]
 
     def self.formats
-      @formats ||= Enum.new(plaintext: 1,
-                            markdown: 2)
+      @formats ||= Enum.new(plaintext: 1, markdown: 2)
     end
 
     def initialize(mail_string, opts = {})
@@ -107,6 +108,7 @@ module Email
     def process_internal
       raise BouncedEmailError  if is_bounce?
       raise NoSenderDetectedError if @from_email.blank?
+      raise FromReplyByAddressError if is_from_reply_by_email_address?
       raise ScreenedEmailError if ScreenedEmail.should_block?(@from_email)
 
       user = find_user(@from_email)
@@ -163,7 +165,15 @@ module Email
           end
         end
 
-        raise first_exception || BadDestinationAddress
+        raise first_exception if first_exception
+
+        if post = find_related_post(force: true)
+          if Guardian.new(user).can_see_post?(post) && post.created_at < 90.days.ago
+            raise OldDestinationError.new("#{Discourse.base_url}/p/#{post.id}")
+          end
+        end
+
+        raise BadDestinationAddress
       end
     end
 
@@ -195,38 +205,33 @@ module Email
       true
     end
 
+    def is_from_reply_by_email_address?
+      Email::Receiver.reply_by_email_address_regex.match(@from_email)
+    end
+
     def verp
       @verp ||= all_destinations.select { |to| to[/\+verp-\h{32}@/] }.first
     end
 
     def self.update_bounce_score(email, score)
-      # only update bounce score once per day
-      key = "bounce_score:#{email}:#{Date.today}"
+      if user = User.find_by_email(email)
+        old_bounce_score = user.user_stat.bounce_score
+        new_bounce_score = old_bounce_score + score
+        range = (old_bounce_score + 1..new_bounce_score)
 
-      if $redis.setnx(key, "1")
-        $redis.expire(key, 25.hours)
+        user.user_stat.bounce_score = new_bounce_score
+        user.user_stat.reset_bounce_score_after = SiteSetting.reset_bounce_score_after_days.days.from_now
+        user.user_stat.save!
 
-        if user = User.find_by_email(email)
-          user.user_stat.bounce_score += score
-          user.user_stat.reset_bounce_score_after = SiteSetting.reset_bounce_score_after_days.days.from_now
-          user.user_stat.save!
-
-          bounce_score = user.user_stat.bounce_score
-          if user.active && bounce_score >= SiteSetting.bounce_score_threshold_deactivate
-            user.update!(active: false)
-            reason = I18n.t("user.deactivated", email: user.email)
-            StaffActionLogger.new(Discourse.system_user).log_user_deactivate(user, reason)
-          elsif bounce_score >= SiteSetting.bounce_score_threshold
-            # NOTE: we check bounce_score before sending emails, nothing to do
-            # here other than log it happened.
-            reason = I18n.t("user.email.revoked", email: user.email, date: user.user_stat.reset_bounce_score_after)
-            StaffActionLogger.new(Discourse.system_user).log_revoke_email(user, reason)
-          end
+        if user.active && range === SiteSetting.bounce_score_threshold_deactivate
+          user.update!(active: false)
+          reason = I18n.t("user.deactivated", email: user.email)
+          StaffActionLogger.new(Discourse.system_user).log_user_deactivate(user, reason)
+        elsif range === SiteSetting.bounce_score_threshold
+          # NOTE: we check bounce_score before sending emails, nothing to do here other than log it happened.
+          reason = I18n.t("user.email.revoked", email: user.email, date: user.user_stat.reset_bounce_score_after)
+          StaffActionLogger.new(Discourse.system_user).log_revoke_email(user, reason)
         end
-
-        true
-      else
-        false
       end
     end
 
@@ -296,20 +301,21 @@ module Email
     end
 
     HTML_EXTRACTERS ||= [
-      [:gmail, / class="gmail_/],
-      [:outlook, / id="(divRplyFwdMsg|Signature)"/],
-      [:word, / class="WordSection1"/],
-      [:exchange, / name="message(Body|Reply)Section"/],
-      [:apple_mail, / id="AppleMailSignature"/],
-      [:mozilla, / class="moz-/],
-      [:protonmail, / class="protonmail_/],
-      [:zimbra, / data-marker="__/],
+      [:gmail, /class="gmail_(?!default)/],
+      [:outlook, /id="(divRplyFwdMsg|Signature)"/],
+      [:word, /class="WordSection1"/],
+      [:exchange, /name="message(Body|Reply)Section"/],
+      [:apple_mail, /id="AppleMailSignature"/],
+      [:mozilla, /class="moz-/],
+      [:protonmail, /class="protonmail_/],
+      [:zimbra, /data-marker="__/],
+      [:newton, /(id|class)="cm_/],
     ]
 
     def extract_from_gmail(doc)
       # GMail adds a bunch of 'gmail_' prefixed classes like: gmail_signature, gmail_extra, gmail_quote
-      # Just elide them all
-      elided = doc.css("*[class^='gmail_']").remove
+      # Just elide them all except for 'gmail_default'
+      elided = doc.css("*[class^='gmail_']:not([class*='gmail_default'])").remove
       to_markdown(doc.to_html, elided.to_html)
     end
 
@@ -357,6 +363,12 @@ module Email
     def extract_from_zimbra(doc)
       # Removes anything that has a 'data-marker' attribute
       elided = doc.css("*[data-marker]").remove
+      to_markdown(doc.to_html, elided.to_html)
+    end
+
+    def extract_from_newton(doc)
+      # Removes anything that has an id or a class starting with 'cm_'
+      elided = doc.css("*[id^='cm_'], *[class^='cm_']").remove
       to_markdown(doc.to_html, elided.to_html)
     end
 
@@ -717,9 +729,13 @@ module Email
       reply_addresses.flatten!
       reply_addresses.select!(&:present?)
       reply_addresses.map! { |a| Regexp.escape(a) }
-      reply_addresses.map! { |a| a.gsub(Regexp.escape("%{reply_key}"), "(\\h{32})") }
-
-      /#{reply_addresses.join("|")}/
+      reply_addresses.map! { |a| a.gsub("\+", "\+?") }
+      reply_addresses.map! { |a| a.gsub(Regexp.escape("%{reply_key}"), "(\\h{32})?") }
+      if reply_addresses.empty?
+        /$a/ # a regex that can never match
+      else
+        /#{reply_addresses.join("|")}/
+      end
     end
 
     def group_incoming_emails_regex
@@ -730,8 +746,8 @@ module Email
       @category_email_in_regex ||= Regexp.union Category.pluck(:email_in).select(&:present?).map { |e| e.split("|") }.flatten.uniq
     end
 
-    def find_related_post
-      return if SiteSetting.find_related_post_with_key && !sent_to_mailinglist_mirror?
+    def find_related_post(force: false)
+      return if !force && SiteSetting.find_related_post_with_key && !sent_to_mailinglist_mirror?
 
       message_ids = Email::Receiver.extract_reply_message_ids(@mail, max_message_id_count: 5)
       return if message_ids.empty?

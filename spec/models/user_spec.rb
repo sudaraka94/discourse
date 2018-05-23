@@ -94,7 +94,7 @@ describe User do
   describe '#count_by_signup_date' do
     before(:each) do
       User.destroy_all
-      freeze_time
+      freeze_time DateTime.parse('2017-02-01 12:00')
       Fabricate(:user)
       Fabricate(:user, created_at: 1.day.ago)
       Fabricate(:user, created_at: 1.day.ago)
@@ -449,6 +449,14 @@ describe User do
     it 'is able to guess a decent name from an email' do
       expect(User.suggest_name('sam.saffron@gmail.com')).to eq('Sam Saffron')
     end
+
+    it 'is able to guess a decent name from username' do
+      expect(User.suggest_name('@sam.saffron')).to eq('Sam Saffron')
+    end
+
+    it 'is able to guess a decent name from name' do
+      expect(User.suggest_name('sam saffron')).to eq('Sam Saffron')
+    end
   end
 
   describe 'username format' do
@@ -545,6 +553,11 @@ describe User do
 
       user = Fabricate(:user, email: "bar@foo.com")
       expect(User.username_available?(user.username, user.primary_email.email)).to eq(false)
+    end
+
+    it 'returns false when a username equals an existing group name' do
+      Fabricate(:group, name: 'foo')
+      expect(User.username_available?('Foo')).to eq(false)
     end
   end
 
@@ -1236,24 +1249,28 @@ describe User do
 
   describe "#purge_unactivated" do
     let!(:user) { Fabricate(:user) }
-    let!(:inactive) { Fabricate(:user, active: false) }
-    let!(:inactive_old) { Fabricate(:user, active: false, created_at: 1.month.ago) }
+    let!(:unactivated) { Fabricate(:user, active: false) }
+    let!(:unactivated_old) { Fabricate(:user, active: false, created_at: 1.month.ago) }
+    let!(:unactivated_old_with_pm) { Fabricate(:user, active: false, created_at: 2.months.ago) }
+
+    before do
+      PostCreator.new(Discourse.system_user,
+        title: "Welcome to our Discourse",
+        raw: "This is a welcome message",
+        archetype: Archetype.private_message,
+        target_usernames: [unactivated_old_with_pm.username],
+      ).create
+    end
 
     it 'should only remove old, unactivated users' do
       User.purge_unactivated
-      all_users = User.all
-      expect(all_users.include?(user)).to eq(true)
-      expect(all_users.include?(inactive)).to eq(true)
-      expect(all_users.include?(inactive_old)).to eq(false)
+      expect(User.real.all).to match_array([user, unactivated, unactivated_old_with_pm])
     end
 
     it "does nothing if purge_unactivated_users_grace_period_days is 0" do
       SiteSetting.purge_unactivated_users_grace_period_days = 0
       User.purge_unactivated
-      all_users = User.all
-      expect(all_users.include?(user)).to eq(true)
-      expect(all_users.include?(inactive)).to eq(true)
-      expect(all_users.include?(inactive_old)).to eq(true)
+      expect(User.real.all).to match_array([user, unactivated, unactivated_old, unactivated_old_with_pm])
     end
   end
 
@@ -1312,6 +1329,14 @@ describe User do
       expect(group_history.action).to eq(GroupHistory.actions[:add_user_to_group])
       expect(group_history.acting_user).to eq(Discourse.system_user)
       expect(group_history.target_user).to eq(user)
+    end
+
+    it "is automatically added to a group when the email matches the SSO record" do
+      user = Fabricate(:user, active: true, email: "sso@bar.com")
+      user.create_single_sign_on_record(external_id: 123, external_email: "sso@bar.com", last_payload: "")
+      user.set_automatic_groups
+      group.reload
+      expect(group.users.include?(user)).to eq(true)
     end
 
     it "get attributes from the group" do

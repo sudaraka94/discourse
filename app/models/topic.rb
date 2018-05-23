@@ -458,9 +458,10 @@ class Topic < ActiveRecord::Base
   end
 
   def self.listable_count_per_day(start_date, end_date, category_id = nil)
-    result = listable_topics.where('created_at >= ? and created_at <= ?', start_date, end_date)
+    result = listable_topics.where("topics.created_at >= ? AND topics.created_at <= ?", start_date, end_date)
+    result = result.group('date(topics.created_at)').order('date(topics.created_at)')
     result = result.where(category_id: category_id) if category_id
-    result.group('date(created_at)').order('date(created_at)').count
+    result.count
   end
 
   def private_message?
@@ -661,12 +662,32 @@ SQL
 
       if self.category_id != new_category.id
         self.update!(category_id: new_category.id)
-        Category.where(id: old_category.id).update_all("topic_count = topic_count - 1") if old_category
+
+        if old_category
+          Category
+            .where(id: old_category.id)
+            .update_all("topic_count = topic_count - 1")
+        end
 
         # when a topic changes category we may have to start watching it
         # if we happen to have read state for it
         CategoryUser.auto_watch(category_id: new_category.id, topic_id: self.id)
         CategoryUser.auto_track(category_id: new_category.id, topic_id: self.id)
+
+        post = self.ordered_posts.first
+
+        if post
+          post_alerter = PostAlerter.new
+
+          post_alerter.notify_post_users(
+            post,
+            [post.user, post.last_editor].uniq
+          )
+
+          post_alerter.notify_first_post_watchers(
+            post, post_alerter.category_watchers(self)
+          )
+        end
       end
 
       Category.where(id: new_category.id).update_all("topic_count = topic_count + 1")
@@ -1005,10 +1026,6 @@ SQL
 
   def relative_url(post_number = nil)
     Topic.relative_url(id, slug, post_number)
-  end
-
-  def unsubscribe_url
-    "#{url}/unsubscribe"
   end
 
   def clear_pin_for(user)

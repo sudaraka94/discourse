@@ -1191,11 +1191,8 @@ describe Topic do
         category.reload
       end
 
-      it 'increases the topic_count' do
-        expect(category.topic_count).to eq(1)
-      end
-
       it "doesn't change the topic_count when the value doesn't change" do
+        expect(category.topic_count).to eq(1)
         expect { topic.change_category_to_id(category.id); category.reload }.not_to change(category, :topic_count)
       end
 
@@ -1213,6 +1210,44 @@ describe Topic do
           expect(topic.reload.category).to eq(new_category)
           expect(new_category.reload.topic_count).to eq(1)
           expect(category.reload.topic_count).to eq(0)
+        end
+
+        describe 'user that is watching the new category' do
+          it 'should generate the notification for the topic' do
+            topic.posts << Fabricate(:post)
+
+            CategoryUser.set_notification_level_for_category(
+              user,
+              CategoryUser::notification_levels[:watching],
+              new_category.id
+            )
+
+            another_user = Fabricate(:user)
+
+            CategoryUser.set_notification_level_for_category(
+              another_user,
+              CategoryUser::notification_levels[:watching_first_post],
+              new_category.id
+            )
+
+            expect do
+              topic.change_category_to_id(new_category.id)
+            end.to change { Notification.count }.by(2)
+
+            expect(Notification.where(
+              user_id: user.id,
+              topic_id: topic.id,
+              post_number: 1,
+              notification_type: Notification.types[:posted]
+            ).exists?).to eq(true)
+
+            expect(Notification.where(
+              user_id: another_user.id,
+              topic_id: topic.id,
+              post_number: 1,
+              notification_type: Notification.types[:watching_first_post]
+            ).exists?).to eq(true)
+          end
         end
 
         describe 'when new category is set to auto close by default' do
@@ -1726,7 +1761,7 @@ describe Topic do
 
   describe '#listable_count_per_day' do
     before(:each) do
-      freeze_time
+      freeze_time DateTime.parse('2017-03-01 12:00')
 
       Fabricate(:topic)
       Fabricate(:topic, created_at: 1.day.ago)

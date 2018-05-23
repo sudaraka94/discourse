@@ -79,6 +79,8 @@ class User < ActiveRecord::Base
 
   has_one :api_key, dependent: :destroy
 
+  has_many :push_subscriptions, dependent: :destroy
+
   belongs_to :uploaded_avatar, class_name: 'Upload'
 
   has_many :acting_group_histories, dependent: :destroy, foreign_key: :acting_user_id, class_name: 'GroupHistory'
@@ -206,7 +208,8 @@ class User < ActiveRecord::Base
   def self.username_available?(username, email = nil)
     lower = username.downcase
     return false if reserved_username?(lower)
-    return true  if !User.exists?(username_lower: lower)
+    return true  if User.exec_sql(User::USERNAME_EXISTS_SQL, username: lower).count == 0
+
     # staged users can use the same username since they will take over the account
     email.present? && User.joins(:user_emails).exists?(staged: true, username_lower: lower, user_emails: { primary: true, email: email })
   end
@@ -266,22 +269,27 @@ class User < ActiveRecord::Base
     user
   end
 
+  def unstage
+    if self.staged
+      self.staged = false
+      self.custom_fields[FROM_STAGED] = true
+      self.notifications.destroy_all
+      DiscourseEvent.trigger(:user_unstaged, self)
+    end
+  end
+
   def self.unstage(params)
     if user = User.where(staged: true).with_email(params[:email].strip.downcase).first
       params.each { |k, v| user.send("#{k}=", v) }
-      user.staged = false
       user.active = false
-      user.custom_fields[FROM_STAGED] = true
-      user.notifications.destroy_all
-
-      DiscourseEvent.trigger(:user_unstaged, user)
+      user.unstage
     end
     user
   end
 
-  def self.suggest_name(email)
-    return "" if email.blank?
-    email[/\A[^@]+/].tr(".", " ").titleize
+  def self.suggest_name(string)
+    return "" if string.blank?
+    (string[/\A[^@]+/].presence || string[/[^@]+\z/]).tr(".", " ").titleize
   end
 
   def self.find_by_username_or_email(username_or_email)
@@ -775,7 +783,9 @@ class User < ActiveRecord::Base
   end
 
   def email_confirmed?
-    email_tokens.where(email: email, confirmed: true).present? || email_tokens.empty?
+    email_tokens.where(email: email, confirmed: true).present? ||
+    email_tokens.empty? ||
+    single_sign_on_record&.external_email == email
   end
 
   def activate
@@ -796,8 +806,7 @@ class User < ActiveRecord::Base
   end
 
   def readable_name
-    return "#{name} (#{username})" if name.present? && name != username
-    username
+    name.present? && name != username ? "#{name} (#{username})" : username
   end
 
   def badge_count
@@ -828,14 +837,33 @@ class User < ActiveRecord::Base
     (tl_badge + other_badges).take(limit)
   end
 
-  def self.count_by_signup_date(start_date, end_date, group_id = nil)
-    result = where('users.created_at >= ? AND users.created_at <= ?', start_date, end_date)
+  def self.count_by_signup_date(start_date = nil, end_date = nil, group_id = nil)
+    result = self
+
+    if start_date && end_date
+      result = result.group("date(users.created_at)")
+      result = result.where("users.created_at >= ? AND users.created_at <= ?", start_date, end_date)
+      result = result.order('date(users.created_at)')
+    end
 
     if group_id
       result = result.joins("INNER JOIN group_users ON group_users.user_id = users.id")
       result = result.where("group_users.group_id = ?", group_id)
     end
-    result.group('date(users.created_at)').order('date(users.created_at)').count
+
+    result.count
+  end
+
+  def self.count_by_first_post(start_date = nil, end_date = nil)
+    result = joins('INNER JOIN user_stats AS us ON us.user_id = users.id')
+
+    if start_date && end_date
+      result = result.group("date(us.first_post_created_at)")
+      result = result.where("us.first_post_created_at > ? AND us.first_post_created_at < ?", start_date, end_date)
+      result = result.order("date(us.first_post_created_at)")
+    end
+
+    result.count
   end
 
   def secure_category_ids
@@ -1007,7 +1035,7 @@ class User < ActiveRecord::Base
   end
 
   def set_automatic_groups
-    return unless active && email_confirmed? && !staged
+    return if !active || staged || !email_confirmed?
 
     Group.where(automatic: false)
       .where("LENGTH(COALESCE(automatic_membership_email_domains, '')) > 0")
@@ -1171,22 +1199,22 @@ class User < ActiveRecord::Base
     end
   end
 
-  # Delete unactivated accounts (without verified email) that are over a week old
   def self.purge_unactivated
     return [] if SiteSetting.purge_unactivated_users_grace_period_days <= 0
 
-    to_destroy = User.where(active: false)
-      .joins('INNER JOIN user_stats AS us ON us.user_id = users.id')
-      .where("created_at < ?", SiteSetting.purge_unactivated_users_grace_period_days.days.ago)
-      .where('NOT admin AND NOT moderator')
-      .limit(200)
-
     destroyer = UserDestroyer.new(Discourse.system_user)
-    to_destroy.each do |u|
+
+    User
+      .where(active: false)
+      .where("created_at < ?", SiteSetting.purge_unactivated_users_grace_period_days.days.ago)
+      .where("NOT admin AND NOT moderator")
+      .where("NOT EXISTS (SELECT 1 FROM topic_allowed_users WHERE user_id = users.id LIMIT 1)")
+      .limit(200)
+      .find_each do |user|
       begin
-        destroyer.destroy(u, context: I18n.t(:purge_reason))
+        destroyer.destroy(user, context: I18n.t(:purge_reason))
       rescue Discourse::InvalidAccess, UserDestroyer::PostsExistError
-        # if for some reason the user can't be deleted, continue on to the next one
+        # keep going
       end
     end
   end

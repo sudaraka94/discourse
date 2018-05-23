@@ -9,6 +9,7 @@ class TagGroup < ActiveRecord::Base
 
   belongs_to :parent_tag, class_name: 'Tag'
 
+  before_create :init_permissions
   before_save :apply_permissions
 
   attr_accessor :permissions
@@ -38,10 +39,16 @@ class TagGroup < ActiveRecord::Base
     mapped = permissions.map do |group, permission|
       group_id = Group.group_id_from_param(group)
       permission = TagGroupPermission.permission_types[permission] unless permission.is_a?(Integer)
-
-      return [] if group_id == everyone_group_id && permission == full
-
       [group_id, permission]
+    end
+  end
+
+  def init_permissions
+    unless tag_group_permissions.present? || @permissions
+      tag_group_permissions.build(
+        group_id: Group::AUTO_GROUPS[:everyone],
+        permission_type: TagGroupPermission.permission_types[:full]
+      )
     end
   end
 
@@ -55,22 +62,21 @@ class TagGroup < ActiveRecord::Base
     end
   end
 
-  def visible_only_to_staff
-    # currently only "everyone" and "staff" groups are supported
-    tag_group_permissions.count > 0
-  end
-
-  def self.allowed(guardian)
+  def self.visible(guardian)
     if guardian.is_staff?
       TagGroup
     else
-      category_permissions_filter = <<~SQL
-        (id IN ( SELECT tag_group_id FROM category_tag_groups WHERE category_id IN (?))
-        OR id NOT IN (SELECT tag_group_id FROM category_tag_groups))
-        AND id NOT IN (SELECT tag_group_id FROM tag_group_permissions)
+      filter_sql = <<~SQL
+        (
+          id IN (SELECT tag_group_id FROM category_tag_groups WHERE category_id IN (?))
+        ) OR (
+          id NOT IN (SELECT tag_group_id FROM category_tag_groups)
+          AND
+          id IN (SELECT tag_group_id FROM tag_group_permissions WHERE group_id = ?)
+        )
       SQL
 
-      TagGroup.where(category_permissions_filter, guardian.allowed_category_ids)
+      TagGroup.where(filter_sql, guardian.allowed_category_ids, Group::AUTO_GROUPS[:everyone])
     end
   end
 end

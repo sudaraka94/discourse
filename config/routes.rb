@@ -213,9 +213,10 @@ Discourse::Application.routes.draw do
 
       # They have periods in their URLs often:
       get 'site_texts'          => 'site_texts#index'
-      get 'site_texts/(:id)'    => 'site_texts#show',   constraints: { id: /[\w.\-\+]+/i }
-      put 'site_texts/(:id)'    => 'site_texts#update', constraints: { id: /[\w.\-\+]+/i }
-      delete 'site_texts/(:id)' => 'site_texts#revert', constraints: { id: /[\w.\-\+]+/i }
+      get 'site_texts/:id'      => 'site_texts#show',   constraints: { id: /[\w.\-\+]+/i }
+      put 'site_texts/:id.json' => 'site_texts#update', constraints: { id: /[\w.\-\+]+/i }
+      put 'site_texts/:id'      => 'site_texts#update', constraints: { id: /[\w.\-\+]+/i }
+      delete 'site_texts/:id'   => 'site_texts#revert', constraints: { id: /[\w.\-\+]+/i }
 
       get 'email_templates'          => 'email_templates#index'
       get 'email_templates/(:id)'    => 'email_templates#show',   constraints: { id: /[0-9a-z_.]+/ }
@@ -229,6 +230,9 @@ Discourse::Application.routes.draw do
     resources :permalinks, constraints: AdminConstraint.new
 
     get "version_check" => "versions#show"
+
+    get "dashboard-next" => "dashboard_next#index"
+    get "dashboard-old" => "dashboard#index"
 
     resources :dashboard, only: [:index] do
       collection do
@@ -395,8 +399,6 @@ Discourse::Application.routes.draw do
     get "#{root_path}/:username/preferences/second-factor" => "users#preferences", constraints: { username: RouteFormat.username }
     delete "#{root_path}/:username/preferences/user_image" => "users#destroy_user_image", constraints: { username: RouteFormat.username }
     put "#{root_path}/:username/preferences/avatar/pick" => "users#pick_avatar", constraints: { username: RouteFormat.username }
-    get "#{root_path}/:username/preferences/card-badge" => "users#card_badge", constraints: { username: RouteFormat.username }
-    put "#{root_path}/:username/preferences/card-badge" => "users#update_card_badge", constraints: { username: RouteFormat.username }
     get "#{root_path}/:username/staff-info" => "users#staff_info", constraints: { username: RouteFormat.username }
     get "#{root_path}/:username/summary" => "users#summary", constraints: { username: RouteFormat.username }
     get "#{root_path}/:username/invited" => "users#invited", constraints: { username: RouteFormat.username }
@@ -449,6 +451,7 @@ Discourse::Application.routes.draw do
   get "posts/by_number/:topic_id/:post_number" => "posts#by_number"
   get "posts/:id/reply-history" => "posts#reply_history"
   get "posts/:id/reply-ids"     => "posts#reply_ids"
+  get "posts/:id/reply-ids/all" => "posts#all_reply_ids"
   get "posts/:username/deleted" => "posts#deleted_posts", constraints: { username: RouteFormat.username }
   get "posts/:username/flagged" => "posts#flagged_posts", constraints: { username: RouteFormat.username }
 
@@ -648,8 +651,6 @@ Discourse::Application.routes.draw do
   get "t/:topic_id/wordpress" => "topics#wordpress", constraints: { topic_id: /\d+/ }
   get "t/:slug/:topic_id/moderator-liked" => "topics#moderator_liked", constraints: { topic_id: /\d+/ }
   get "t/:slug/:topic_id/summary" => "topics#show", defaults: { summary: true }, constraints: { topic_id: /\d+/ }
-  get "t/:slug/:topic_id/unsubscribe" => "topics#unsubscribe", constraints: { topic_id: /\d+/ }
-  get "t/:topic_id/unsubscribe" => "topics#unsubscribe", constraints: { topic_id: /\d+/ }
   get "t/:topic_id/summary" => "topics#show", constraints: { topic_id: /\d+/ }
   put "t/:slug/:topic_id" => "topics#update", constraints: { topic_id: /\d+/ }
   put "t/:slug/:topic_id/star" => "topics#star", constraints: { topic_id: /\d+/ }
@@ -710,9 +711,6 @@ Discourse::Application.routes.draw do
     collection do
       post "export_entity" => "export_csv#export_entity"
     end
-    member do
-      get "" => "export_csv#show", constraints: { id: /[^\/]+/ }
-    end
   end
 
   get "onebox" => "onebox#show"
@@ -732,7 +730,7 @@ Discourse::Application.routes.draw do
     # current site before updating to a new Service Worker.
     # Support the old Service Worker path to avoid routing error filling up the
     # logs.
-    get "/service-worker.js" => redirect(relative_url_root + service_worker_asset), format: :js
+    get "/service-worker.js" => redirect(relative_url_root + service_worker_asset, status: 302), format: :js
     get service_worker_asset => "static#service_worker_asset", format: :js
   elsif Rails.env.development?
     get "/service-worker.js" => "static#service_worker_asset", format: :js
@@ -744,6 +742,7 @@ Discourse::Application.routes.draw do
   get "favicon/proxied" => "static#favicon", format: false
 
   get "robots.txt" => "robots_txt#index"
+  get "robots-builder.json" => "robots_txt#builder"
   get "offline.html" => "offline#index"
   get "manifest.json" => "metadata#manifest", as: :manifest
   get "opensearch" => "metadata#opensearch", format: :xml
@@ -799,6 +798,13 @@ Discourse::Application.routes.draw do
 
   get "/themes/assets/:key" => "themes#assets"
 
+  if Rails.env == "test" || Rails.env == "development"
+    get "/qunit" => "qunit#index"
+  end
+
   get "*url", to: 'permalinks#show', constraints: PermalinkConstraint.new
+
+  post "/push_notifications/subscribe" => "push_notification#subscribe"
+  post "/push_notifications/unsubscribe" => "push_notification#unsubscribe"
 
 end

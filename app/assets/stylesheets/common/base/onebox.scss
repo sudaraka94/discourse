@@ -329,7 +329,7 @@ pre.onebox code li{
 
 pre.onebox code ol.lines{
 	position:relative;
-	margin-left: 40px;
+	margin: 0 0 0 40px;
 }
 
 pre.onebox code ol.lines li {
@@ -520,9 +520,7 @@ aside.onebox.stackexchange .onebox-body {
 
 .onebox.githubcommit {
    pre.message {
-     clear: left;
      padding: 0;
-     padding-top: 10px;
    }
 }
 

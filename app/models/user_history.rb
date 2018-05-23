@@ -71,7 +71,11 @@ class UserHistory < ActiveRecord::Base
       disabled_second_factor: 52,
       post_edit: 53,
       topic_published: 54,
-      recover_topic: 55
+      recover_topic: 55,
+      post_approved: 56,
+      create_badge: 57,
+      change_badge: 58,
+      delete_badge: 59,
     )
   end
 
@@ -121,7 +125,11 @@ class UserHistory < ActiveRecord::Base
       :disabled_second_factor,
       :post_edit,
       :topic_published,
-      :recover_topic
+      :recover_topic,
+      :post_approved,
+      :create_badge,
+      :change_badge,
+      :delete_badge,
     ]
   end
 

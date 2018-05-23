@@ -9,6 +9,8 @@
 //= require ./deprecated
 
 // Stuff we need to load first
+//= require ./discourse/helpers/parse-html
+//= require ./discourse/lib/to-markdown
 //= require ./discourse/lib/utilities
 //= require ./discourse/lib/page-visible
 //= require ./discourse/lib/logout
@@ -64,6 +66,7 @@
 //= require ./discourse/models/draft
 //= require ./discourse/models/composer
 //= require ./discourse/models/user-badge
+//= require_tree ./discourse/lib
 //= require_tree ./discourse/mixins
 //= require ./discourse/models/invite
 //= require ./discourse/controllers/discovery-sortable
@@ -87,7 +90,6 @@
 //= require ./discourse/helpers/loading-spinner
 //= require ./discourse/helpers/category-link
 //= require ./discourse/lib/export-result
-//= require_tree ./discourse/lib
 //= require ./discourse/mapping-router
 
 //= require_tree ./discourse/controllers

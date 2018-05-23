@@ -78,6 +78,13 @@ describe Email::Receiver do
     expect { process(:bad_destinations) }.to raise_error(Email::Receiver::BadDestinationAddress)
   end
 
+  it "raises an OldDestinationError when notification is too old" do
+    topic = Fabricate(:topic, id: 424242)
+    post  = Fabricate(:post, topic: topic, id: 123456, created_at: 1.year.ago)
+
+    expect { process(:old_destination) }.to raise_error(Email::Receiver::OldDestinationError)
+  end
+
   it "raises a BouncerEmailError when email is a bounced email" do
     expect { process(:bounced_email) }.to raise_error(Email::Receiver::BouncedEmailError)
     expect(IncomingEmail.last.is_bounce).to eq(true)
@@ -100,17 +107,12 @@ describe Email::Receiver do
     let!(:email_log) { Fabricate(:email_log, user: user, bounce_key: bounce_key) }
     let!(:email_log_2) { Fabricate(:email_log, user: user, bounce_key: bounce_key_2) }
 
-    before do
-      $redis.del("bounce_score:#{user.email}:#{Date.today}")
-      $redis.del("bounce_score:#{user.email}:#{2.days.from_now.to_date}")
-    end
-
     it "deals with soft bounces" do
       expect { process(:soft_bounce_via_verp) }.to raise_error(Email::Receiver::BouncedEmailError)
 
       email_log.reload
       expect(email_log.bounced).to eq(true)
-      expect(email_log.user.user_stat.bounce_score).to eq(1)
+      expect(email_log.user.user_stat.bounce_score).to eq(SiteSetting.soft_bounce_score)
     end
 
     it "deals with hard bounces" do
@@ -118,15 +120,28 @@ describe Email::Receiver do
 
       email_log.reload
       expect(email_log.bounced).to eq(true)
-      expect(email_log.user.user_stat.bounce_score).to eq(2)
-
-      freeze_time 2.days.from_now
+      expect(email_log.user.user_stat.bounce_score).to eq(SiteSetting.hard_bounce_score)
 
       expect { process(:hard_bounce_via_verp_2) }.to raise_error(Email::Receiver::BouncedEmailError)
 
       email_log_2.reload
-      expect(email_log_2.user.user_stat.bounce_score).to eq(4)
+      expect(email_log_2.user.user_stat.bounce_score).to eq(SiteSetting.hard_bounce_score * 2)
       expect(email_log_2.bounced).to eq(true)
+    end
+
+    it "automatically deactive users once they reach the 'bounce_score_threshold_deactivate' threshold" do
+      expect(user.active).to eq(true)
+
+      user.user_stat.bounce_score = SiteSetting.bounce_score_threshold_deactivate - 1
+      user.user_stat.save!
+
+      expect { process(:soft_bounce_via_verp) }.to raise_error(Email::Receiver::BouncedEmailError)
+
+      user.reload
+      email_log.reload
+
+      expect(email_log.bounced).to eq(true)
+      expect(user.active).to eq(false)
     end
 
   end
@@ -148,6 +163,10 @@ describe Email::Receiver do
 
     it "raises a ReplyUserNotMatchingError when the email address isn't matching the one we sent the notification to" do
       expect { process(:reply_user_not_matching) }.to raise_error(Email::Receiver::ReplyUserNotMatchingError)
+    end
+
+    it "raises a FromReplyByAddressError when the email is from the reply by email address" do
+      expect { process(:from_reply_by_email_address) }.to raise_error(Email::Receiver::FromReplyByAddressError)
     end
 
     it "raises a TopicNotFoundError when the topic was deleted" do
@@ -183,7 +202,7 @@ describe Email::Receiver do
 
     it "works" do
       expect { process(:text_reply) }.to change { topic.posts.count }
-      expect(topic.posts.last.raw).to eq("This is a text reply :)")
+      expect(topic.posts.last.raw).to eq("This is a text reply :)\n\nEmail parsing should not break because of a UTF-8 character: ’")
       expect(topic.posts.last.via_email).to eq(true)
       expect(topic.posts.last.cooked).not_to match(/<br/)
 
@@ -233,7 +252,7 @@ describe Email::Receiver do
     it "uses text when prefer_html site setting is enabled but no html is available" do
       SiteSetting.incoming_email_prefer_html = true
       expect { process(:text_reply) }.to change { topic.posts.count }
-      expect(topic.posts.last.raw).to eq("This is a text reply :)")
+      expect(topic.posts.last.raw).to eq("This is a text reply :)\n\nEmail parsing should not break because of a UTF-8 character: ’")
     end
 
     it "removes the 'on <date>, <contact> wrote' quoting line" do
@@ -664,24 +683,24 @@ describe Email::Receiver do
       SiteSetting.alternative_reply_by_email_addresses = nil
     end
 
-    it "is empty by default" do
-      expect(Email::Receiver.reply_by_email_address_regex).to eq(//)
+    it "it maches nothing if there is not reply_by_email_address" do
+      expect(Email::Receiver.reply_by_email_address_regex).to eq(/$a/)
     end
 
     it "uses 'reply_by_email_address' site setting" do
       SiteSetting.reply_by_email_address = "foo+%{reply_key}@bar.com"
-      expect(Email::Receiver.reply_by_email_address_regex).to eq(/foo\+(\h{32})@bar\.com/)
+      expect(Email::Receiver.reply_by_email_address_regex).to eq(/foo\+?(\h{32})?@bar\.com/)
     end
 
     it "uses 'alternative_reply_by_email_addresses' site setting" do
       SiteSetting.alternative_reply_by_email_addresses = "alt.foo+%{reply_key}@bar.com"
-      expect(Email::Receiver.reply_by_email_address_regex).to eq(/alt\.foo\+(\h{32})@bar\.com/)
+      expect(Email::Receiver.reply_by_email_address_regex).to eq(/alt\.foo\+?(\h{32})?@bar\.com/)
     end
 
     it "combines both 'reply_by_email' settings" do
       SiteSetting.reply_by_email_address = "foo+%{reply_key}@bar.com"
       SiteSetting.alternative_reply_by_email_addresses = "alt.foo+%{reply_key}@bar.com"
-      expect(Email::Receiver.reply_by_email_address_regex).to eq(/foo\+(\h{32})@bar\.com|alt\.foo\+(\h{32})@bar\.com/)
+      expect(Email::Receiver.reply_by_email_address_regex).to eq(/foo\+?(\h{32})?@bar\.com|alt\.foo\+?(\h{32})?@bar\.com/)
     end
 
   end

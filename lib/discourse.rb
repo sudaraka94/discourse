@@ -164,6 +164,14 @@ module Discourse
     @plugins ||= []
   end
 
+  def self.hidden_plugins
+    @hidden_plugins ||= []
+  end
+
+  def self.visible_plugins
+    self.plugins - self.hidden_plugins
+  end
+
   def self.plugin_themes
     @plugin_themes ||= plugins.map(&:themes).flatten
   end
@@ -432,7 +440,7 @@ module Discourse
     RailsMultisite::ConnectionManagement.establish_connection(db: current_db)
     MessageBus.after_fork
     SiteSetting.after_fork
-    $redis.client.reconnect
+    $redis._client.reconnect
     Rails.cache.reconnect
     Logster.store.redis.reconnect
     # shuts down all connections in the pool

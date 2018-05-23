@@ -17,6 +17,7 @@ class Upload < ActiveRecord::Base
   attr_accessor :for_group_message
   attr_accessor :for_theme
   attr_accessor :for_private_message
+  attr_accessor :for_export
 
   validates_presence_of :filesize
   validates_presence_of :original_filename
@@ -83,8 +84,8 @@ class Upload < ActiveRecord::Base
 
     # always try to get the path
     uri = begin
-      URI(url)
-    rescue URI::InvalidURIError
+      URI(URI.unescape(url))
+    rescue URI::InvalidURIError, URI::InvalidComponentError
     end
 
     url = uri.path if uri.try(:scheme)
