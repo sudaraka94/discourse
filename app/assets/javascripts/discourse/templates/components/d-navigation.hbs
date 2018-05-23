@@ -12,6 +12,8 @@
   {{category-notifications-button value=category.notification_level category=category}}
 {{/if}}
 
+{{plugin-outlet name="after-nav-pills" args=(hash model=model)}}
+
 {{create-topic-button
   canCreateTopic=canCreateTopic
   action=createTopic
